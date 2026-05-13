@@ -1,0 +1,38 @@
+services:
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.17.2
+    container_name: mlflow-server
+    ports:
+      - "5050:5000"  # On change ici : 5050 sur ton Mac -> 5000 dans le conteneur
+    volumes:
+      - ./mlflow_data:/mlflow_data
+    command: >
+      mlflow server 
+      --backend-store-uri sqlite:////mlflow_data/mlflow.db 
+      --artifacts-destination /mlflow_data/artifacts 
+      --serve-artifacts 
+      --host 0.0.0.0
+
+  api:
+    build: .
+    container_name: scoring-api
+    depends_on:
+      - mlflow
+    ports:
+      - "8000:8000"
+    environment:
+      MODEL_PATH: /app/models/best_model.joblib
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    volumes:
+      - ./models:/app/models:ro
+
+  streamlit:
+    build: .
+    container_name: scoring-ui
+    depends_on:
+      - api
+    ports:
+      - "8501:8501"
+    environment:
+      API_URL: http://api:8000
+    command: streamlit run src/scoring_app/streamlit_app.py --server.address 0.0.0.0 --server.port 8501
