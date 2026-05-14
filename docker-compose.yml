@@ -51,6 +51,22 @@ services:
     networks:
       - mlops_net
 
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    image: credit-scoring-api:latest
+    container_name: scoring-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      MODEL_PATH: /app/models/best_model.joblib
+      METADATA_PATH: /app/models/metadata.json
+      PORT: "8000"
+    networks:
+      - mlops_net
+
 volumes:
   postgres_data:
   mlflow_artifacts:

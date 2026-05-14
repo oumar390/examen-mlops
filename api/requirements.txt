@@ -1,0 +1,14 @@
+# Slim requirements for the API container — only what's needed at runtime.
+# Versions pinned to match the training environment so the joblib pickle loads.
+
+fastapi==0.115.5
+uvicorn[standard]==0.32.0
+pydantic==2.9.2
+
+# Required to unpickle the trained pipeline
+joblib==1.4.2
+numpy==1.26.4
+pandas==2.2.3
+scikit-learn==1.5.2
+xgboost==2.1.2
+imbalanced-learn==0.12.4

@@ -1,0 +1,22 @@
+# Render Blueprint — declarative config for the credit scoring API.
+# Render auto-detects this file at the repo root and creates the service.
+# https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: credit-scoring-api
+    runtime: docker
+    repo: https://github.com/oumar390/examen-mlops
+    branch: main
+    dockerfilePath: api/Dockerfile
+    dockerContext: .
+    plan: free
+    region: frankfurt
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: MODEL_PATH
+        value: /app/models/best_model.joblib
+      - key: METADATA_PATH
+        value: /app/models/metadata.json
