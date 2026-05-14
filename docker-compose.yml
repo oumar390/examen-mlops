@@ -67,6 +67,23 @@ services:
     networks:
       - mlops_net
 
+  streamlit:
+    build:
+      context: .
+      dockerfile: streamlit_app/Dockerfile
+    image: credit-scoring-ui:latest
+    container_name: scoring-ui
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "8501:8501"
+    environment:
+      # Use Docker network name (api), not localhost
+      API_URL: http://api:8000
+    networks:
+      - mlops_net
+
 volumes:
   postgres_data:
   mlflow_artifacts:
