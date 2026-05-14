@@ -1,7 +1,9 @@
-"""Build the EDA notebook programmatically with nbformat.
+"""Build the comprehensive EDA notebook programmatically.
 
-Run once, then execute with `jupyter nbconvert --to notebook --execute`.
-This script is part of the project so anyone can regenerate the notebook.
+The notebook is the central document of the EDA phase: every cleaning rule
+and every engineered feature is derived **inline** with business
+justification, formula, code, and validation. The src/scoring/data.py
+module replicates these rules for production reuse (training + API).
 """
 from __future__ import annotations
 
@@ -25,44 +27,46 @@ def code(text: str) -> None:
 # =============================================================================
 md(
     """
-# EDA — UCI Credit Card Default
+# 🔬 EDA, Cleaning & Feature Engineering — UCI Credit Card Default
 
-**Dataset** : 30 000 clients de cartes de crédit taïwanais observés sur 6 mois
-(avril → septembre 2005).
-**Cible** : `default` (1 = défaut de paiement le mois suivant, 0 sinon).
+Ce notebook est le **document de référence** pour la préparation des données.
+Tout y est inline et documenté : chaque règle de nettoyage et chaque feature
+dérivée a sa justification métier, sa formule, son code et sa validation
+statistique.
 
-Ce notebook couvre 10 sections :
-1. Vue structurelle
-2. Qualité des données
-3. Statistiques descriptives
-4. Analyse de la cible
-5. Univariate analysis
-6. Bivariate analysis (variable vs cible)
-7. Multivariate (corrélations, heatmaps)
-8. Outliers
-9. Analyses temporelles (6 mois)
-10. Feature engineering & dataset processed
+**Dataset** : 30 000 clients de cartes de crédit taïwanais (Avril → Septembre
+2005), 25 colonnes. Cible binaire : `default.payment.next.month`.
 
-Les cleaning rules et le feature engineering sont définis dans
-`src/scoring/data.py` afin de garantir la cohérence entre EDA, training et API.
+**Plan du notebook**
+
+1. Setup
+2. Vue structurelle des données brutes
+3. Qualité des données — détection des anomalies
+4. ✂️ **Cleaning détaillé** — 4 opérations avec before/after
+5. Statistiques descriptives (post-cleaning)
+6. Analyse de la cible
+7. Analyse univariée
+8. Analyse bivariée (variable vs cible) avec tests stats
+9. Analyse multivariée (corrélations)
+10. Détection des outliers
+11. Analyses temporelles (6 mois)
+12. 🛠️ **Feature engineering détaillé** — 12 features avec justification
+13. Validation de l'utilité des nouvelles features
+14. Sauvegarde du dataset processed
 """
 )
 
 # =============================================================================
-# Setup
+# Section 1 — Setup
 # =============================================================================
-md("## ⚙️ Setup")
+md("## 1. ⚙️ Setup")
 
 code(
     """
 import sys
+import warnings
 from pathlib import Path
 
-# Make src importable
-ROOT = Path.cwd().parent if Path.cwd().name == 'notebooks' else Path.cwd()
-sys.path.insert(0, str(ROOT / 'src'))
-
-import warnings
 warnings.filterwarnings('ignore')
 
 import numpy as np
@@ -72,119 +76,319 @@ import seaborn as sns
 from scipy import stats
 
 sns.set_theme(style='whitegrid', context='notebook')
-pd.set_option('display.max_columns', 50)
+pd.set_option('display.max_columns', 60)
 pd.set_option('display.width', 200)
 
+ROOT = Path.cwd().parent if Path.cwd().name == 'notebooks' else Path.cwd()
 FIG_DIR = ROOT / 'docs' / 'figures'
 FIG_DIR.mkdir(parents=True, exist_ok=True)
 
-from scoring.data import (
-    load_raw, clean, decode_categoricals, engineer_features, prepare,
-    PAY_COLS, BILL_COLS, PAY_AMT_COLS, TARGET,
-)
+RAW_PATH = ROOT / 'data' / 'raw' / 'UCI_Credit_Card.csv'
+PROCESSED_PATH = ROOT / 'data' / 'processed' / 'credit_clean.parquet'
 
-df_raw = load_raw()
-df = clean(df_raw)
-print(f'Raw   : {df_raw.shape}')
-print(f'Clean : {df.shape}')
-df.head()
+print(f'ROOT      : {ROOT}')
+print(f'RAW_PATH  : {RAW_PATH.relative_to(ROOT)}')
+print(f'numpy     : {np.__version__}')
+print(f'pandas    : {pd.__version__}')
 """
 )
 
 # =============================================================================
-# Section 1 — Vue structurelle
+# Section 2 — Vue structurelle
 # =============================================================================
 md(
     """
-## 1️⃣ Vue structurelle
+## 2. Vue structurelle des données brutes
 
-**Objectif** : comprendre la forme et le contenu brut du dataset avant
-toute analyse.
+Objectif : comprendre la forme du dataset, les types, la cardinalité.
 """
 )
 
-code("print('Shape :', df.shape)\nprint('Memory:', df.memory_usage(deep=True).sum() / 1024**2, 'MB')")
-code("df.dtypes.value_counts()")
-code("df.info()")
-code("df.nunique().sort_values()")
-code("print('Doublons :', df.duplicated().sum())")
 code(
     """
-# Vue rapide : 3 lignes aléatoires
-df.sample(3, random_state=0)
+df_raw = pd.read_csv(RAW_PATH)
+print(f'Shape : {df_raw.shape}')
+print(f'Memory: {df_raw.memory_usage(deep=True).sum() / 1024**2:.2f} MB')
+df_raw.head()
+"""
+)
+
+code("df_raw.dtypes.value_counts()")
+code("df_raw.info()")
+
+code(
+    """
+# Cardinalité (nombre de valeurs uniques par colonne)
+df_raw.nunique().sort_values()
+"""
+)
+
+code(
+    """
+print('Doublons exactes :', df_raw.duplicated().sum())
 """
 )
 
 # =============================================================================
-# Section 2 — Qualité des données
+# Section 3 — Qualité (anomalies)
 # =============================================================================
 md(
     """
-## 2️⃣ Qualité des données
+## 3. Qualité des données — détection des anomalies
 
-**Objectif** : repérer valeurs manquantes, codes anormaux, valeurs
-incohérentes. Le dataset UCI a quelques codes non documentés sur
-`EDUCATION` (0, 5, 6) et `MARRIAGE` (0) — la fonction `clean()` les
-remappe vers la modalité "others".
+Trois choses à vérifier :
+- Valeurs manquantes
+- **Codes catégoriels en dehors de la documentation officielle**
+- Valeurs incohérentes (BILL_AMT négatif, etc.)
 """
 )
 
 code(
     """
-missing = df.isnull().sum()
-print('Total missing values :', missing.sum())
-missing[missing > 0]
+# Valeurs manquantes
+missing = df_raw.isnull().sum()
+print(f'Total NaN : {missing.sum()}')
+if missing.sum() > 0:
+    print(missing[missing > 0])
+"""
+)
+
+md(
+    """
+### 3.1 — Codes EDUCATION et MARRIAGE non documentés
+
+D'après la documentation UCI :
+- `EDUCATION` doit être dans `{1, 2, 3, 4}` (graduate school / university /
+  high school / others)
+- `MARRIAGE` doit être dans `{1, 2, 3}` (married / single / others)
+
+Vérifions ce qu'on a vraiment dans les données brutes.
 """
 )
 
 code(
     """
-# Codes catégoriels après cleaning
-print('EDUCATION :', sorted(df['EDUCATION'].unique()))
-print('MARRIAGE  :', sorted(df['MARRIAGE'].unique()))
-print('SEX       :', sorted(df['SEX'].unique()))
-"""
-)
-
-code(
-    """
-# Avant/après cleaning sur EDUCATION
-print('Avant cleaning :')
+print('--- EDUCATION (valeurs brutes) ---')
 print(df_raw['EDUCATION'].value_counts().sort_index())
 print()
-print('Après cleaning :')
+print('--- MARRIAGE (valeurs brutes) ---')
+print(df_raw['MARRIAGE'].value_counts().sort_index())
+"""
+)
+
+md(
+    """
+**Anomalies détectées :**
+- `EDUCATION` contient les codes `0`, `5`, `6` qui ne sont pas dans la doc
+  (345 clients soit 1.15% des données)
+- `MARRIAGE` contient le code `0` (54 clients, 0.18%)
+
+Ces codes sont vraisemblablement des erreurs de saisie ou des cas
+inclassables. Nous les regrouperons dans la catégorie « others » lors
+du cleaning (Section 4).
+"""
+)
+
+md("### 3.2 — Codes PAY_* (historique de paiement)")
+
+code(
+    """
+PAY_COLS = ['PAY_0', 'PAY_2', 'PAY_3', 'PAY_4', 'PAY_5', 'PAY_6']
+for col in PAY_COLS:
+    print(f'{col} : {sorted(df_raw[col].unique())}')
+"""
+)
+
+md(
+    """
+**Lecture des codes PAY_* :**
+- `-2` : pas d'utilisation ce mois-ci (no use)
+- `-1` : payé en totalité, à l'heure (paid duly)
+- `0` : crédit revolving utilisé mais pas en retard
+- `1` à `8` : retard de 1 à 8+ mois
+
+Les codes `-2` et `0` ne sont pas dans la doc officielle mais sont
+cohérents avec le métier (consensus Kaggle). On les **garde tels quels** :
+ce sont des valeurs ordinales légitimes pour les modèles.
+"""
+)
+
+md("### 3.3 — Valeurs négatives sur BILL_AMT")
+
+code(
+    """
+BILL_COLS = [f'BILL_AMT{i}' for i in range(1, 7)]
+neg_count = (df_raw[BILL_COLS] < 0).sum()
+neg_pct_any = (df_raw[BILL_COLS] < 0).any(axis=1).mean() * 100
+print('Lignes avec BILL_AMT négatif par mois :')
+print(neg_count)
+print(f'\\n% de clients avec au moins un BILL négatif : {neg_pct_any:.1f}%')
+"""
+)
+
+md(
+    """
+**Interprétation** : un `BILL_AMT` négatif n'est pas une anomalie — cela
+correspond à un avoir (le client a payé plus que la facture le mois
+précédent, ou la banque a effectué un remboursement). Légitime, on garde.
+"""
+)
+
+# =============================================================================
+# Section 4 — Cleaning détaillé
+# =============================================================================
+md(
+    """
+## 4. ✂️ Cleaning détaillé
+
+On applique **4 opérations** sur le DataFrame brut. Chaque opération est
+expliquée, justifiée et validée par un before/after.
+"""
+)
+
+md(
+    """
+### 4.1 — Opération 1 : drop de la colonne `ID`
+
+**Pourquoi ?** `ID` est un identifiant client (1, 2, 3, ...). Aucune info
+prédictive — pire, il pourrait introduire un biais spurieux. À supprimer
+systématiquement.
+"""
+)
+
+code(
+    """
+# Snapshot AVANT
+print(f'AVANT : df_raw a {df_raw.shape[1]} colonnes')
+print(f'        ID range : {df_raw["ID"].min()} → {df_raw["ID"].max()}')
+"""
+)
+
+code(
+    """
+df = df_raw.drop(columns=['ID']).copy()
+print(f'APRÈS : df a {df.shape[1]} colonnes')
+"""
+)
+
+md(
+    """
+### 4.2 — Opération 2 : rename de la cible
+
+**Pourquoi ?** Le nom `default.payment.next.month` contient des **points**
+qui empêchent l'accès attribut-style (`df.default` ne marche pas avec
+des points dans le nom). On renomme en `default`.
+"""
+)
+
+code(
+    """
+# Snapshot AVANT
+print('AVANT :', [c for c in df.columns if 'default' in c])
+"""
+)
+
+code(
+    """
+df = df.rename(columns={'default.payment.next.month': 'default'})
+TARGET = 'default'
+print('APRÈS :', [c for c in df.columns if 'default' in c])
+"""
+)
+
+md(
+    """
+### 4.3 — Opération 3 : recodage `EDUCATION`
+
+**Règle** : les codes `0`, `5`, `6` (non documentés) sont remappés vers
+`4` (« others »).
+
+**Pourquoi ce choix plutôt qu'imputer ou supprimer ?**
+- Supprimer 345 lignes (1.15%) = perdre de l'info pour rien
+- Imputer (KNN, median) complique le pipeline et n'apporte rien ici
+- Regrouper en `others` est défendable : ces codes étaient déjà
+  « inclassables », ils rejoignent une catégorie « autres ».
+"""
+)
+
+code(
+    """
+print('AVANT recodage :')
 print(df['EDUCATION'].value_counts().sort_index())
 """
 )
 
 code(
     """
-# Codes PAY (status historique)
-for col in PAY_COLS:
-    print(f'{col} : {sorted(df[col].unique())}')
+df.loc[~df['EDUCATION'].isin([1, 2, 3, 4]), 'EDUCATION'] = 4
+
+print('APRÈS recodage :')
+print(df['EDUCATION'].value_counts().sort_index())
+
+moved_edu = ((df_raw['EDUCATION'] == 0).sum()
+             + (df_raw['EDUCATION'] == 5).sum()
+             + (df_raw['EDUCATION'] == 6).sum())
+print(f'\\n→ {moved_edu} clients déplacés vers EDUCATION=4 (others)')
+"""
+)
+
+md(
+    """
+### 4.4 — Opération 4 : recodage `MARRIAGE`
+
+**Règle** : le code `0` (non documenté, 54 clients) est remappé vers
+`3` (« others »).
 """
 )
 
 code(
     """
-# Valeurs négatives sur BILL_AMT (peut signaler un avoir/remboursement)
-neg_bill = (df[BILL_COLS] < 0).sum()
-print('Lignes avec BILL_AMT négatif (par mois) :')
-print(neg_bill)
-print()
-print(f'% de clients avec au moins un BILL négatif : '
-      f'{((df[BILL_COLS] < 0).any(axis=1).mean() * 100):.1f}%')
+print('AVANT recodage :')
+print(df['MARRIAGE'].value_counts().sort_index())
+"""
+)
+
+code(
+    """
+df.loc[~df['MARRIAGE'].isin([1, 2, 3]), 'MARRIAGE'] = 3
+
+print('APRÈS recodage :')
+print(df['MARRIAGE'].value_counts().sort_index())
+
+moved_mar = (df_raw['MARRIAGE'] == 0).sum()
+print(f'\\n→ {moved_mar} clients déplacés vers MARRIAGE=3 (others)')
+"""
+)
+
+md(
+    """
+### 4.5 — Synthèse du cleaning
+
+| Opération | Effet | Lignes affectées |
+|-----------|-------|------------------|
+| Drop `ID` | 25 → 24 colonnes | 0 |
+| Rename target | `default.payment.next.month` → `default` | 0 |
+| Recodage `EDUCATION` | 7 codes → 4 codes | 345 |
+| Recodage `MARRIAGE` | 4 codes → 3 codes | 54 |
+
+Au total **399 lignes modifiées (1.3%)** et **0 ligne supprimée**.
+Le cleaning est volontairement conservateur.
+"""
+)
+
+code(
+    """
+print(f'Dataset clean : {df.shape}')
+df.head()
 """
 )
 
 # =============================================================================
-# Section 3 — Statistiques descriptives
+# Section 5 — Statistiques descriptives
 # =============================================================================
 md(
     """
-## 3️⃣ Statistiques descriptives
-
-**Objectif** : valeurs typiques, dispersion, asymétrie, queues lourdes.
+## 5. Statistiques descriptives (post-cleaning)
 """
 )
 
@@ -199,29 +403,22 @@ df.describe(percentiles=[0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99]).T
 
 code(
     """
-# Skewness (asymétrie) — |skew| > 1 indique une distribution très asymétrique
-skew = df.drop(columns=[TARGET]).skew().sort_values(ascending=False)
+# Skewness — |skew| > 1 indique une distribution très asymétrique
+skew = df.skew().sort_values(ascending=False)
 print('Top 10 variables les plus asymétriques :')
-print(skew.head(10))
-"""
-)
-
-code(
-    """
-# Statistiques séparées par classe de la cible
-df.groupby(TARGET).describe().T
+print(skew.head(10).round(2))
 """
 )
 
 # =============================================================================
-# Section 4 — La cible
+# Section 6 — Analyse de la cible
 # =============================================================================
 md(
     """
-## 4️⃣ Analyse de la cible
+## 6. Analyse de la cible
 
-**Constat** : ~22% de défauts → dataset **déséquilibré** → nécessite SMOTE
-ou `class_weight='balanced'` lors du training.
+Constat clé : **22% de défauts** → dataset déséquilibré → besoin de
+SMOTE ou `class_weight='balanced'` à la phase d'entraînement.
 """
 )
 
@@ -229,7 +426,6 @@ code(
     """
 target_counts = df[TARGET].value_counts()
 target_pct = df[TARGET].value_counts(normalize=True) * 100
-
 print(target_counts)
 print()
 print(target_pct.round(2).astype(str) + ' %')
@@ -239,20 +435,15 @@ print(target_pct.round(2).astype(str) + ' %')
 code(
     """
 fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-
-# Bar plot
 sns.countplot(x=TARGET, data=df, ax=axes[0])
 axes[0].set_title('Effectifs par classe')
 for p in axes[0].patches:
     axes[0].annotate(int(p.get_height()),
                      (p.get_x() + p.get_width() / 2, p.get_height()),
                      ha='center', va='bottom')
-
-# Pie chart
 axes[1].pie(target_counts, labels=['Non-défaut (0)', 'Défaut (1)'],
             autopct='%1.1f%%', startangle=90, colors=['#4C72B0', '#DD8452'])
 axes[1].set_title('Répartition')
-
 plt.tight_layout()
 plt.savefig(FIG_DIR / '04_target_balance.png', dpi=120, bbox_inches='tight')
 plt.show()
@@ -260,33 +451,27 @@ plt.show()
 )
 
 # =============================================================================
-# Section 5 — Univariate analysis
+# Section 7 — Univariate
 # =============================================================================
 md(
     """
-## 5️⃣ Analyse univariée
+## 7. Analyse univariée
 
-### 5.A — Variables numériques continues
-
-Histogrammes + boxplots pour `LIMIT_BAL`, `AGE`, `BILL_AMT*`, `PAY_AMT*`.
+### 7.A — Variables numériques continues
 """
 )
 
 code(
     """
-# LIMIT_BAL et AGE
 fig, axes = plt.subplots(2, 2, figsize=(13, 8))
-
 sns.histplot(df['LIMIT_BAL'], kde=True, ax=axes[0, 0], bins=40, color='#4C72B0')
-axes[0, 0].set_title('Distribution LIMIT_BAL (plafond de crédit)')
+axes[0, 0].set_title('Distribution LIMIT_BAL')
 sns.boxplot(x=df['LIMIT_BAL'], ax=axes[0, 1], color='#4C72B0')
 axes[0, 1].set_title('Boxplot LIMIT_BAL')
-
 sns.histplot(df['AGE'], kde=True, ax=axes[1, 0], bins=30, color='#55A868')
 axes[1, 0].set_title('Distribution AGE')
 sns.boxplot(x=df['AGE'], ax=axes[1, 1], color='#55A868')
 axes[1, 1].set_title('Boxplot AGE')
-
 plt.tight_layout()
 plt.savefig(FIG_DIR / '05a_limit_age.png', dpi=120, bbox_inches='tight')
 plt.show()
@@ -295,7 +480,8 @@ plt.show()
 
 code(
     """
-# BILL_AMT (en log car très skewé) — grille 2x3
+PAY_AMT_COLS = [f'PAY_AMT{i}' for i in range(1, 7)]
+
 fig, axes = plt.subplots(2, 3, figsize=(15, 7))
 for ax, col in zip(axes.ravel(), BILL_COLS):
     sns.histplot(np.log1p(df[col].clip(lower=0)), kde=True, ax=ax, bins=40)
@@ -307,21 +493,7 @@ plt.show()
 """
 )
 
-code(
-    """
-# PAY_AMT (idem)
-fig, axes = plt.subplots(2, 3, figsize=(15, 7))
-for ax, col in zip(axes.ravel(), PAY_AMT_COLS):
-    sns.histplot(np.log1p(df[col].clip(lower=0)), kde=True, ax=ax, bins=40, color='#C44E52')
-    ax.set_title(f'log1p({col})')
-plt.suptitle('Distributions des PAY_AMT (log1p)', y=1.02, fontsize=14)
-plt.tight_layout()
-plt.savefig(FIG_DIR / '05a_pay_amt_log.png', dpi=120, bbox_inches='tight')
-plt.show()
-"""
-)
-
-md("### 5.B — Variables catégorielles")
+md("### 7.B — Variables catégorielles")
 
 code(
     """
@@ -337,11 +509,10 @@ plt.show()
 
 code(
     """
-# Distribution des PAY_* (status historique paiement)
 fig, axes = plt.subplots(2, 3, figsize=(15, 7))
 for ax, col in zip(axes.ravel(), PAY_COLS):
     sns.countplot(x=col, data=df, ax=ax)
-    ax.set_title(f'{col} (status mois)')
+    ax.set_title(f'{col}')
 plt.suptitle('Distribution des PAY_* — historique de paiement', y=1.02, fontsize=14)
 plt.tight_layout()
 plt.savefig(FIG_DIR / '05b_pay_status.png', dpi=120, bbox_inches='tight')
@@ -350,25 +521,23 @@ plt.show()
 )
 
 # =============================================================================
-# Section 6 — Bivariate
+# Section 8 — Bivariate
 # =============================================================================
 md(
     """
-## 6️⃣ Analyse bivariée (variable vs cible)
+## 8. Analyse bivariée (variable vs cible)
 
-**Objectif** : repérer quelles variables ont une **distribution
-différente selon que le client a fait défaut ou non** — ce sont les
-candidates fortes pour la prédiction.
+On veut identifier les variables dont la distribution diffère entre
+clients défaut et non-défaut.
 """
 )
 
-md("### 6.A — Numérique vs cible (boxplots)")
+md("### 8.A — Boxplots numérique vs cible")
 
 code(
     """
-num_cols_compare = ['LIMIT_BAL', 'AGE', 'BILL_AMT1', 'PAY_AMT1']
 fig, axes = plt.subplots(2, 2, figsize=(13, 9))
-for ax, col in zip(axes.ravel(), num_cols_compare):
+for ax, col in zip(axes.ravel(), ['LIMIT_BAL', 'AGE', 'BILL_AMT1', 'PAY_AMT1']):
     sns.boxplot(x=TARGET, y=col, data=df, ax=ax)
     ax.set_title(f'{col} selon {TARGET}')
     ax.set_xlabel('default (0 = non, 1 = oui)')
@@ -378,26 +547,18 @@ plt.show()
 """
 )
 
-code(
+md(
     """
-# Densités superposées (KDE) — voir le chevauchement des distributions
-fig, axes = plt.subplots(1, 2, figsize=(13, 4))
-sns.kdeplot(data=df, x='LIMIT_BAL', hue=TARGET, common_norm=False, ax=axes[0])
-axes[0].set_title('Densité LIMIT_BAL par classe')
-sns.kdeplot(data=df, x='AGE', hue=TARGET, common_norm=False, ax=axes[1])
-axes[1].set_title('Densité AGE par classe')
-plt.tight_layout()
-plt.savefig(FIG_DIR / '06a_kde_target.png', dpi=120, bbox_inches='tight')
-plt.show()
+### 8.B — Test statistique : Mann-Whitney U
+
+Test non-paramétrique : les deux groupes (défaut vs non-défaut) ont-ils
+la même distribution sur une variable numérique ?
 """
 )
 
 code(
     """
-# Test statistique Mann-Whitney (non-paramétrique) — variables numériques clés
 from scipy.stats import mannwhitneyu
-print('Test de Mann-Whitney U (H0: distributions identiques entre classes)')
-print('-' * 75)
 print(f'{"Variable":<15} {"U-stat":>15} {"p-value":>15} {"significatif":>15}')
 print('-' * 75)
 for col in ['LIMIT_BAL', 'AGE', 'BILL_AMT1', 'PAY_AMT1', 'PAY_0']:
@@ -409,11 +570,10 @@ for col in ['LIMIT_BAL', 'AGE', 'BILL_AMT1', 'PAY_AMT1', 'PAY_0']:
 """
 )
 
-md("### 6.B — Catégorielle vs cible (taux de défaut)")
+md("### 8.C — Taux de défaut par catégorie")
 
 code(
     """
-# Taux de défaut par catégorie démographique
 fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 for ax, col in zip(axes, ['SEX', 'EDUCATION', 'MARRIAGE']):
     rate = df.groupby(col)[TARGET].mean().sort_values()
@@ -431,24 +591,8 @@ plt.show()
 
 code(
     """
-# Table croisée SEX × default (en %)
-print('SEX vs default (% par ligne) :')
-print(pd.crosstab(df['SEX'], df[TARGET], normalize='index').round(3) * 100)
-print()
-print('EDUCATION vs default (% par ligne) :')
-print(pd.crosstab(df['EDUCATION'], df[TARGET], normalize='index').round(3) * 100)
-print()
-print('MARRIAGE vs default (% par ligne) :')
-print(pd.crosstab(df['MARRIAGE'], df[TARGET], normalize='index').round(3) * 100)
-"""
-)
-
-code(
-    """
-# Test du Chi² — dépendance significative ?
 from scipy.stats import chi2_contingency
 print('Test du Chi² (H0: indépendance entre la variable et la cible)')
-print('-' * 65)
 for col in ['SEX', 'EDUCATION', 'MARRIAGE']:
     table = pd.crosstab(df[col], df[TARGET])
     chi2, p, dof, _ = chi2_contingency(table)
@@ -457,16 +601,13 @@ for col in ['SEX', 'EDUCATION', 'MARRIAGE']:
 """
 )
 
+md("### 8.D — Taux de défaut selon PAY_0 (variable star)")
+
 code(
     """
-# Taux de défaut par PAY_0 (le mois le plus récent)
 rate_by_pay0 = df.groupby('PAY_0')[TARGET].agg(['mean', 'count']).round(3)
 rate_by_pay0.columns = ['taux_defaut', 'effectif']
-print('Taux de défaut par PAY_0 (status mois le plus récent) :')
 print(rate_by_pay0)
-print()
-print('→ La progression du taux de défaut avec le retard valide '
-      "qu'on tient une variable très prédictive.")
 """
 )
 
@@ -477,9 +618,9 @@ rate = df.groupby('PAY_0')[TARGET].mean()
 sns.barplot(x=rate.index.astype(str), y=rate.values, palette='YlOrRd')
 plt.axhline(df[TARGET].mean(), color='gray', ls='--',
             label=f'moyenne globale ({df[TARGET].mean():.1%})')
-plt.title('Taux de défaut selon PAY_0 (status du mois le plus récent)')
+plt.title('Taux de défaut selon PAY_0 (mois le plus récent)')
 plt.ylabel('taux de défaut')
-plt.xlabel('PAY_0 (-2=no use, -1=paid duly, 0=revolving, 1+=delay months)')
+plt.xlabel('PAY_0 (-2=no use, -1=paid duly, 0=revolving, 1+=delay)')
 plt.legend()
 plt.tight_layout()
 plt.savefig(FIG_DIR / '06b_default_by_pay0.png', dpi=120, bbox_inches='tight')
@@ -488,20 +629,12 @@ plt.show()
 )
 
 # =============================================================================
-# Section 7 — Multivariate
+# Section 9 — Multivariate
 # =============================================================================
-md(
-    """
-## 7️⃣ Analyse multivariée
-
-**Objectif** : repérer corrélations entre variables (multicolinéarité)
-et les plus liées à la cible.
-"""
-)
+md("## 9. Analyse multivariée")
 
 code(
     """
-# Matrice de corrélation Pearson
 corr = df.corr(method='pearson')
 plt.figure(figsize=(14, 11))
 sns.heatmap(corr, cmap='coolwarm', center=0, annot=False, square=True,
@@ -515,38 +648,17 @@ plt.show()
 
 code(
     """
-# Top corrélations avec la cible
-corr_target = corr[TARGET].drop(TARGET).abs().sort_values(ascending=False)
-print('Top 15 variables les plus corrélées (en valeur absolue) avec default :')
-print(corr_target.head(15).round(3))
+print('Top 15 variables corrélées avec default (Pearson) :')
+print(corr[TARGET].drop(TARGET).abs().sort_values(ascending=False).head(15).round(3))
 """
 )
 
 code(
     """
-# Corrélation Spearman (basée sur les rangs, plus robuste aux outliers)
-corr_s = df.corr(method='spearman')
-corr_s_target = corr_s[TARGET].drop(TARGET).sort_values()
-plt.figure(figsize=(10, 8))
-sns.barplot(x=corr_s_target.values, y=corr_s_target.index,
-            palette='coolwarm')
-plt.axvline(0, color='black', lw=0.5)
-plt.title('Corrélation Spearman de chaque variable avec default')
-plt.xlabel('coefficient de Spearman')
-plt.tight_layout()
-plt.savefig(FIG_DIR / '07_corr_spearman_target.png', dpi=120, bbox_inches='tight')
-plt.show()
-"""
-)
-
-code(
-    """
-# Corrélations entre PAY_* (devraient être fortement positives :
-# les retards sont persistants dans le temps)
 plt.figure(figsize=(7, 5))
 sns.heatmap(df[PAY_COLS].corr(), annot=True, fmt='.2f', cmap='coolwarm',
             center=0, square=True)
-plt.title('Corrélations entre PAY_0..PAY_6 (persistance des retards)')
+plt.title('Corrélations PAY_0..PAY_6 (persistance des retards)')
 plt.tight_layout()
 plt.savefig(FIG_DIR / '07_corr_pay_block.png', dpi=120, bbox_inches='tight')
 plt.show()
@@ -554,22 +666,19 @@ plt.show()
 )
 
 # =============================================================================
-# Section 8 — Outliers
+# Section 10 — Outliers
 # =============================================================================
 md(
     """
-## 8️⃣ Détection des outliers
+## 10. Détection des outliers
 
-**Objectif** : identifier les valeurs extrêmes susceptibles de perturber
-les modèles linéaires. Nous gardons les outliers (XGBoost et RandomForest
-y sont robustes), mais on les signale pour le standardisation côté
-LogisticRegression.
+On signale les outliers mais on les **garde** : XGBoost et RandomForest y sont
+robustes. La LogReg aura un `RobustScaler` dans son pipeline.
 """
 )
 
 code(
     """
-# Méthode IQR — % d'outliers par variable numérique clé
 num_cols = ['LIMIT_BAL', 'AGE', 'BILL_AMT1', 'PAY_AMT1']
 outliers_pct = {}
 for col in num_cols:
@@ -578,27 +687,14 @@ for col in num_cols:
     low, high = q1 - 1.5 * iqr, q3 + 1.5 * iqr
     mask = (df[col] < low) | (df[col] > high)
     outliers_pct[col] = mask.mean() * 100
-
 pd.Series(outliers_pct).round(2).to_frame('% outliers IQR')
 """
 )
 
 code(
     """
-# Z-score : % de points |z| > 3
-zscore_pct = {}
-for col in num_cols:
-    z = np.abs((df[col] - df[col].mean()) / df[col].std())
-    zscore_pct[col] = (z > 3).mean() * 100
-pd.Series(zscore_pct).round(2).to_frame('% outliers Z>3')
-"""
-)
-
-code(
-    """
-# Grille de boxplots pour visualisation rapide
 fig, axes = plt.subplots(3, 4, figsize=(16, 9))
-cols_box = (['LIMIT_BAL', 'AGE'] + BILL_COLS[:5] + PAY_AMT_COLS[:5])
+cols_box = ['LIMIT_BAL', 'AGE'] + BILL_COLS[:5] + PAY_AMT_COLS[:5]
 for ax, col in zip(axes.ravel(), cols_box):
     sns.boxplot(x=df[col], ax=ax, color='#4C72B0')
     ax.set_title(col, fontsize=10)
@@ -609,25 +705,22 @@ plt.show()
 )
 
 # =============================================================================
-# Section 9 — Analyses temporelles
+# Section 11 — Temporal
 # =============================================================================
 md(
     """
-## 9️⃣ Analyses temporelles (6 mois)
+## 11. Analyses temporelles (6 mois)
 
-**Objectif** : exploiter la dimension temporelle (avril → septembre 2005).
-Indices : tendance des factures, persistance des retards, % de clients
-en retard chaque mois.
+Mapping : `PAY_0` = septembre 2005 (le plus récent), `PAY_6` = avril 2005.
+Idem pour `BILL_AMT1` (sept.) → `BILL_AMT6` (avril).
 """
 )
 
 code(
     """
-# Mapping mois → label lisible (PAY_0 = septembre, PAY_6 = avril)
 months = ['Sept (PAY_0)', 'Août (PAY_2)', 'Juillet (PAY_3)',
           'Juin (PAY_4)', 'Mai (PAY_5)', 'Avril (PAY_6)']
 
-# Évolution de la moyenne BILL_AMT et PAY_AMT
 bill_mean = df[BILL_COLS].mean()
 pay_mean = df[PAY_AMT_COLS].mean()
 bill_mean.index = months
@@ -636,14 +729,10 @@ pay_mean.index = months
 fig, axes = plt.subplots(1, 2, figsize=(14, 4))
 bill_mean.plot(kind='line', marker='o', ax=axes[0], color='#4C72B0')
 axes[0].set_title('Moyenne BILL_AMT par mois (NT$)')
-axes[0].set_ylabel('moyenne BILL_AMT')
 axes[0].grid(alpha=0.3)
-
 pay_mean.plot(kind='line', marker='o', ax=axes[1], color='#C44E52')
 axes[1].set_title('Moyenne PAY_AMT par mois (NT$)')
-axes[1].set_ylabel('moyenne PAY_AMT')
 axes[1].grid(alpha=0.3)
-
 plt.tight_layout()
 plt.savefig(FIG_DIR / '09_temporal_means.png', dpi=120, bbox_inches='tight')
 plt.show()
@@ -652,12 +741,11 @@ plt.show()
 
 code(
     """
-# % de clients en retard (PAY_X >= 1) chaque mois
 delay_pct = (df[PAY_COLS] >= 1).mean() * 100
 delay_pct.index = months
 plt.figure(figsize=(10, 4))
 sns.barplot(x=delay_pct.index, y=delay_pct.values, palette='YlOrRd')
-plt.title('% de clients en retard de paiement par mois')
+plt.title('% de clients en retard par mois')
 plt.ylabel('% en retard (PAY >= 1)')
 plt.xticks(rotation=20)
 plt.tight_layout()
@@ -667,84 +755,468 @@ plt.show()
 )
 
 # =============================================================================
-# Section 10 — Feature engineering & dataset processed
+# Section 12 — FEATURE ENGINEERING DÉTAILLÉ
 # =============================================================================
 md(
     """
-## 🛠️ Feature engineering
+## 12. 🛠️ Feature engineering détaillé
 
-Les 12 features dérivées créées dans `engineer_features()` (voir
-`src/scoring/data.py`).
+On construit **12 features dérivées** organisées en **4 thèmes métier** :
+
+| Thème | Features | Intuition business |
+|-------|----------|--------------------|
+| **A — Comportement de paiement** | `PAY_DELAY_COUNT`, `MAX_DELAY`, `MEAN_PAY_STATUS`, `HAS_EVER_DELAYED` | Résume l'historique de retards sur 6 mois |
+| **B — Utilisation du crédit** | `UTIL_RATIO_1`, `MEAN_UTIL`, `MAX_UTIL` | À quel point le client utilise son plafond |
+| **C — Capacité de remboursement** | `TOTAL_PAID`, `TOTAL_BILLED`, `PAY_TO_BILL_RATIO` | Le client paye-t-il proportionnellement à ce qu'il doit |
+| **D — Tendances temporelles** | `BILL_TREND`, `PAY_TREND` | La dette monte ? Les paiements baissent ? |
+
+Pour chaque feature on présente : **intuition métier → formule → code → validation**.
+"""
+)
+
+# ---------- Thème A ----------
+md(
+    """
+### 12.A — Thème : comportement de paiement
+
+#### A.1 `PAY_DELAY_COUNT` — Nombre de mois en retard sur 6
+
+- **Intuition** : un client en retard 1 fois sur 6 n'est pas comme un
+  client en retard 5 fois sur 6. On compte les mois avec retard.
+- **Formule** : `PAY_DELAY_COUNT = Σ 1{PAY_X ≥ 1}` pour les 6 mois
+- **Range** : 0 (jamais en retard) à 6 (toujours en retard)
 """
 )
 
 code(
     """
-df_full = engineer_features(df)
-new_cols = [c for c in df_full.columns if c not in df.columns]
-print(f'{len(new_cols)} features ajoutées :')
-for c in new_cols:
-    print(f'  - {c}')
+df['PAY_DELAY_COUNT'] = (df[PAY_COLS] >= 1).sum(axis=1).astype(int)
 
-df_full[new_cols].describe().T
+print('Distribution PAY_DELAY_COUNT :')
+print(df['PAY_DELAY_COUNT'].value_counts().sort_index())
+print()
+print('Taux de défaut par PAY_DELAY_COUNT :')
+print(df.groupby('PAY_DELAY_COUNT')[TARGET].mean().round(3))
+"""
+)
+
+md(
+    """
+#### A.2 `MAX_DELAY` — Pire retard observé sur 6 mois
+
+- **Intuition** : un défaut sévère même une seule fois est très révélateur.
+- **Formule** : `MAX_DELAY = max(PAY_0, PAY_2, …, PAY_6)`
+- **Range** : -2 (pas d'utilisation) à 8 (retard 8+ mois)
 """
 )
 
 code(
     """
-# Distribution des nouvelles features les plus parlantes par classe
+df['MAX_DELAY'] = df[PAY_COLS].max(axis=1)
+print(df['MAX_DELAY'].value_counts().sort_index())
+print()
+print('Taux de défaut par MAX_DELAY :')
+print(df.groupby('MAX_DELAY')[TARGET].mean().round(3))
+"""
+)
+
+md(
+    """
+#### A.3 `MEAN_PAY_STATUS` — Statut de paiement moyen
+
+- **Intuition** : un score continu qui capture le comportement global.
+  Plus c'est positif, plus le client est chroniquement en retard.
+- **Formule** : `MEAN_PAY_STATUS = mean(PAY_0, PAY_2, …, PAY_6)`
+"""
+)
+
+code(
+    """
+df['MEAN_PAY_STATUS'] = df[PAY_COLS].mean(axis=1)
+print(df['MEAN_PAY_STATUS'].describe().round(3))
+"""
+)
+
+md(
+    """
+#### A.4 `HAS_EVER_DELAYED` — Flag binaire
+
+- **Intuition** : version simplifiée — a-t-il jamais été en retard ?
+- **Formule** : `HAS_EVER_DELAYED = 1 si PAY_DELAY_COUNT > 0 sinon 0`
+- **Utilité** : interprétable et simple, peut suffire pour LogReg.
+"""
+)
+
+code(
+    """
+df['HAS_EVER_DELAYED'] = (df['PAY_DELAY_COUNT'] > 0).astype(int)
+print('Taux de défaut selon HAS_EVER_DELAYED :')
+print(df.groupby('HAS_EVER_DELAYED')[TARGET].mean().round(3))
+"""
+)
+
+code(
+    """
+# Validation visuelle Thème A
 fig, axes = plt.subplots(2, 2, figsize=(13, 8))
 for ax, col in zip(axes.ravel(),
                    ['PAY_DELAY_COUNT', 'MAX_DELAY',
-                    'MEAN_PAY_STATUS', 'MEAN_UTIL']):
-    sns.boxplot(x=TARGET, y=col, data=df_full, ax=ax)
+                    'MEAN_PAY_STATUS', 'HAS_EVER_DELAYED']):
+    sns.boxplot(x=TARGET, y=col, data=df, ax=ax)
     ax.set_title(f'{col} selon default')
+plt.suptitle('Thème A — Comportement de paiement', y=1.02, fontsize=14)
 plt.tight_layout()
-plt.savefig(FIG_DIR / '10_engineered_features.png', dpi=120, bbox_inches='tight')
+plt.savefig(FIG_DIR / '12a_theme_payment.png', dpi=120, bbox_inches='tight')
+plt.show()
+"""
+)
+
+# ---------- Thème B ----------
+md(
+    """
+### 12.B — Thème : utilisation du crédit
+
+Un client qui utilise 95% de son plafond est plus risqué qu'un client à 20%.
+On calcule des **ratios d'utilisation** (utilisation rate = bill / limit).
+"""
+)
+
+md(
+    """
+#### B.1 `UTIL_RATIO_1` — Utilisation au mois le plus récent
+
+- **Intuition** : utilisation actuelle, le signal le plus frais.
+- **Formule** : `UTIL_RATIO_1 = BILL_AMT1 / LIMIT_BAL`
+"""
+)
+
+code(
+    """
+# Protection contre division par 0 (LIMIT_BAL ne devrait jamais être 0, mais on protège)
+limit_safe = df['LIMIT_BAL'].replace(0, np.nan)
+df['UTIL_RATIO_1'] = (df['BILL_AMT1'] / limit_safe).fillna(0)
+print(df['UTIL_RATIO_1'].describe().round(3))
+"""
+)
+
+md(
+    """
+#### B.2 `MEAN_UTIL` — Utilisation moyenne sur 6 mois
+
+- **Intuition** : utilisation chronique (vs ponctuelle).
+- **Formule** : `MEAN_UTIL = mean(BILL_AMT_i / LIMIT_BAL)` pour i=1..6
+"""
+)
+
+code(
+    """
+util_block = df[BILL_COLS].div(limit_safe, axis=0)
+df['MEAN_UTIL'] = util_block.mean(axis=1).fillna(0)
+print(df['MEAN_UTIL'].describe().round(3))
+"""
+)
+
+md(
+    """
+#### B.3 `MAX_UTIL` — Pire mois d'utilisation
+
+- **Intuition** : a-t-il déjà flirté avec son plafond ?
+- **Formule** : `MAX_UTIL = max(BILL_AMT_i / LIMIT_BAL)` pour i=1..6
+"""
+)
+
+code(
+    """
+df['MAX_UTIL'] = util_block.max(axis=1).fillna(0)
+print(df['MAX_UTIL'].describe().round(3))
+"""
+)
+
+code(
+    """
+# Validation Thème B
+fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+for ax, col in zip(axes, ['UTIL_RATIO_1', 'MEAN_UTIL', 'MAX_UTIL']):
+    sns.boxplot(x=TARGET, y=col, data=df, ax=ax, showfliers=False)
+    ax.set_title(f'{col} selon default')
+plt.suptitle('Thème B — Utilisation du crédit (outliers cachés)', y=1.05, fontsize=14)
+plt.tight_layout()
+plt.savefig(FIG_DIR / '12b_theme_utilization.png', dpi=120, bbox_inches='tight')
+plt.show()
+"""
+)
+
+# ---------- Thème C ----------
+md(
+    """
+### 12.C — Thème : capacité de remboursement
+
+On combine factures et paiements pour mesurer la capacité du client
+à honorer ses engagements globalement sur 6 mois.
+"""
+)
+
+md(
+    """
+#### C.1 `TOTAL_PAID` — Total payé sur 6 mois
+
+- **Formule** : `TOTAL_PAID = Σ PAY_AMT_i` pour i=1..6
+"""
+)
+
+code(
+    """
+df['TOTAL_PAID'] = df[PAY_AMT_COLS].sum(axis=1)
+print(df['TOTAL_PAID'].describe().round(0))
+"""
+)
+
+md(
+    """
+#### C.2 `TOTAL_BILLED` — Total facturé sur 6 mois
+
+- **Formule** : `TOTAL_BILLED = Σ BILL_AMT_i` pour i=1..6
+"""
+)
+
+code(
+    """
+df['TOTAL_BILLED'] = df[BILL_COLS].sum(axis=1)
+print(df['TOTAL_BILLED'].describe().round(0))
+"""
+)
+
+md(
+    """
+#### C.3 `PAY_TO_BILL_RATIO` — Capacité de remboursement
+
+- **Intuition** : 1.0 = il paie exactement ce qu'il doit. < 1.0 = il
+  accumule de la dette. > 1.0 = il rembourse plus que sa facture
+  (rare, souvent dû à un avoir).
+- **Formule** : `TOTAL_PAID / TOTAL_BILLED`
+- **Protection** : on évite la division par 0 ou par négatif.
+"""
+)
+
+code(
+    """
+billed_safe = df['TOTAL_BILLED'].where(df['TOTAL_BILLED'] > 0, np.nan)
+df['PAY_TO_BILL_RATIO'] = (df['TOTAL_PAID'] / billed_safe).fillna(0)
+print(df['PAY_TO_BILL_RATIO'].describe().round(3))
+print()
+print('Médiane par classe :')
+print(df.groupby(TARGET)['PAY_TO_BILL_RATIO'].median().round(3))
+"""
+)
+
+code(
+    """
+# Validation Thème C (log scale car très skewé)
+fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+for ax, col in zip(axes, ['TOTAL_PAID', 'TOTAL_BILLED', 'PAY_TO_BILL_RATIO']):
+    sns.boxplot(x=TARGET, y=col, data=df, ax=ax, showfliers=False)
+    ax.set_title(f'{col} selon default')
+plt.suptitle('Thème C — Capacité de remboursement', y=1.05, fontsize=14)
+plt.tight_layout()
+plt.savefig(FIG_DIR / '12c_theme_repayment.png', dpi=120, bbox_inches='tight')
+plt.show()
+"""
+)
+
+# ---------- Thème D ----------
+md(
+    """
+### 12.D — Thème : tendances temporelles
+
+Capturer si la dette monte (BILL_AMT augmente) ou si les paiements
+baissent (PAY_AMT diminue) sur les 6 mois.
+
+**Convention** : `BILL_AMT1` = septembre (le plus récent), `BILL_AMT6`
+= avril (le plus ancien). Donc `BILL_AMT1 - BILL_AMT6` > 0 signifie
+**la dette a augmenté** sur la période.
+"""
+)
+
+md(
+    """
+#### D.1 `BILL_TREND` — Pente de la dette sur 6 mois
+
+- **Intuition** : valeur positive = dette qui monte = mauvais signe.
+- **Formule** : `BILL_TREND = (BILL_AMT1 - BILL_AMT6) / 6`
+"""
+)
+
+code(
+    """
+df['BILL_TREND'] = (df['BILL_AMT1'] - df['BILL_AMT6']) / 6
+print(df['BILL_TREND'].describe().round(0))
+print()
+print('Médiane par classe :')
+print(df.groupby(TARGET)['BILL_TREND'].median().round(0))
+"""
+)
+
+md(
+    """
+#### D.2 `PAY_TREND` — Pente des paiements sur 6 mois
+
+- **Intuition** : valeur positive = paye de plus en plus = bon signe.
+- **Formule** : `PAY_TREND = (PAY_AMT1 - PAY_AMT6) / 6`
+"""
+)
+
+code(
+    """
+df['PAY_TREND'] = (df['PAY_AMT1'] - df['PAY_AMT6']) / 6
+print(df['PAY_TREND'].describe().round(0))
+print()
+print('Médiane par classe :')
+print(df.groupby(TARGET)['PAY_TREND'].median().round(0))
+"""
+)
+
+code(
+    """
+# Validation Thème D
+fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+for ax, col in zip(axes, ['BILL_TREND', 'PAY_TREND']):
+    sns.boxplot(x=TARGET, y=col, data=df, ax=ax, showfliers=False)
+    ax.set_title(f'{col} selon default')
+plt.suptitle('Thème D — Tendances temporelles', y=1.05, fontsize=14)
+plt.tight_layout()
+plt.savefig(FIG_DIR / '12d_theme_trends.png', dpi=120, bbox_inches='tight')
+plt.show()
+"""
+)
+
+# =============================================================================
+# Section 13 — Validation finale
+# =============================================================================
+md(
+    """
+## 13. Validation finale — les nouvelles features sont-elles utiles ?
+
+On compare la corrélation des features dérivées avec la cible vs les
+features originales. Si les nouvelles features dominent le classement,
+on a bien fait notre travail.
+"""
+)
+
+code(
+    """
+print(f'Dataset enrichi : {df.shape}')
+new_cols = ['PAY_DELAY_COUNT', 'MAX_DELAY', 'MEAN_PAY_STATUS', 'HAS_EVER_DELAYED',
+            'UTIL_RATIO_1', 'MEAN_UTIL', 'MAX_UTIL',
+            'TOTAL_PAID', 'TOTAL_BILLED', 'PAY_TO_BILL_RATIO',
+            'BILL_TREND', 'PAY_TREND']
+print(f'{len(new_cols)} features ajoutées')
+"""
+)
+
+code(
+    """
+# Top 20 corrélations (abs) avec default — features originales + dérivées mélangées
+corr_full = df.corr()[TARGET].drop(TARGET).abs().sort_values(ascending=False)
+top20 = corr_full.head(20).round(3)
+
+# Marquer les features dérivées
+labels = ['🆕 ' + c if c in new_cols else '   ' + c for c in top20.index]
+print('Top 20 variables corrélées avec default :')
+for label, val in zip(labels, top20.values):
+    print(f'  {val:.3f}  {label}')
+"""
+)
+
+code(
+    """
+# Visualisation du top 20
+plt.figure(figsize=(10, 8))
+colors = ['#DD8452' if c in new_cols else '#4C72B0' for c in top20.index]
+sns.barplot(x=top20.values, y=top20.index, palette=colors)
+plt.title('Top 20 — corrélation absolue avec default\\n(orange = features dérivées)')
+plt.xlabel('|corrélation Pearson|')
+plt.tight_layout()
+plt.savefig(FIG_DIR / '13_feature_importance_corr.png', dpi=120, bbox_inches='tight')
 plt.show()
 """
 )
 
 code(
     """
-# Top corrélations des features engineered avec la cible
-corr_full = df_full.corr()[TARGET].drop(TARGET).abs().sort_values(ascending=False)
-print('Top 15 variables (cleaned + engineered) corrélées avec default :')
-print(corr_full.head(15).round(3))
+# Validation Spearman (robuste aux outliers)
+corr_s = df.corr(method='spearman')[TARGET].drop(TARGET).abs().sort_values(ascending=False)
+top15_s = corr_s.head(15).round(3)
+print('Top 15 corrélations Spearman (abs) avec default :')
+for c, v in top15_s.items():
+    tag = '🆕' if c in new_cols else '  '
+    print(f'  {v:.3f}  {tag} {c}')
+"""
+)
+
+# =============================================================================
+# Section 14 — Sauvegarde
+# =============================================================================
+md(
+    """
+## 14. Sauvegarde du dataset processed
 """
 )
 
 code(
     """
-# Sauvegarde du dataset processed
-out = ROOT / 'data' / 'processed' / 'credit_clean.parquet'
-out.parent.mkdir(parents=True, exist_ok=True)
-df_full.to_parquet(out, index=False)
-print(f'Saved → {out.relative_to(ROOT)}')
-print(f'Shape : {df_full.shape}')
+PROCESSED_PATH.parent.mkdir(parents=True, exist_ok=True)
+df.to_parquet(PROCESSED_PATH, index=False)
+print(f'Saved → {PROCESSED_PATH.relative_to(ROOT)}')
+print(f'Shape : {df.shape}')
+print(f'Size  : {PROCESSED_PATH.stat().st_size / 1024:.0f} KB')
 """
 )
 
 # =============================================================================
-# Summary
+# Section 15 — Synthèse + lien vers la prod
 # =============================================================================
 md(
     """
-## 📌 Synthèse des findings
+## 15. 📌 Synthèse
 
-| # | Finding |
-|---|---------|
-| 1 | Dataset **propre** : aucune valeur manquante, mais quelques codes non documentés sur EDUCATION et MARRIAGE → traités |
-| 2 | Cible **déséquilibrée** : 22% de défauts → SMOTE ou class_weight indispensable |
-| 3 | Les variables **`PAY_*`** (historique de paiement) sont **de très loin les plus prédictives** |
-| 4 | `LIMIT_BAL` et `AGE` montrent des différences statistiquement significatives entre classes (Mann-Whitney p < 1e-50) |
-| 5 | Les tests **Chi²** confirment que `SEX`, `EDUCATION`, `MARRIAGE` sont liées à la cible (p < 0.001) |
-| 6 | Forte **corrélation entre BILL_AMT successifs** (~0.95) → multicolinéarité → préférer des features agrégées |
-| 7 | Le dataset est **stable dans le temps** : pas de tendance majeure sur 6 mois (utile pour la baseline drift) |
-| 8 | **12 features dérivées** créées : MEAN_PAY_STATUS, PAY_DELAY_COUNT, MEAN_UTIL, etc. — capturent le comportement global |
-| 9 | Dataset processed sauvegardé dans `data/processed/credit_clean.parquet` (36 colonnes, 30 000 lignes) |
+### Cleaning appliqué
+| Opération | Effet |
+|-----------|-------|
+| Drop `ID` | 25 → 24 colonnes |
+| Rename `default.payment.next.month` → `default` | nom Python-friendly |
+| EDUCATION : recoder {0, 5, 6} → 4 (others) | 345 lignes |
+| MARRIAGE : recoder 0 → 3 (others) | 54 lignes |
 
-Prochaine étape : définir la **fonction de score métier** (Étape 3 de l'examen).
+### Feature engineering — 12 nouvelles colonnes
+
+| Thème | Features | Description |
+|-------|----------|-------------|
+| A. Paiement | PAY_DELAY_COUNT, MAX_DELAY, MEAN_PAY_STATUS, HAS_EVER_DELAYED | Historique de retards |
+| B. Utilisation | UTIL_RATIO_1, MEAN_UTIL, MAX_UTIL | Bill / Limit |
+| C. Remboursement | TOTAL_PAID, TOTAL_BILLED, PAY_TO_BILL_RATIO | Capacité globale |
+| D. Tendances | BILL_TREND, PAY_TREND | Évolution 6 mois |
+
+### Dataset final
+- **Shape** : 30 000 lignes × 36 colonnes (24 cleaned + 12 engineered)
+- **Sauvegarde** : `data/processed/credit_clean.parquet`
+
+### Réutilisation en production
+
+Les mêmes règles sont encapsulées dans `src/scoring/data.py` :
+
+```python
+from scoring.data import prepare
+df = prepare()   # load_raw → clean → engineer_features
+```
+
+Ce module est appelé par le script d'entraînement (`src/scoring/train.py`)
+et par l'API FastAPI au moment de la prédiction → **garantie qu'un
+client reçoit en prod exactement le même traitement qu'à l'entraînement**.
+
+### Prochaine étape
+
+→ Étape 3 de l'examen : définir la **fonction de score métier**
+(coût FN vs coût FP).
 """
 )
 
@@ -770,6 +1242,7 @@ def build() -> None:
     with open(out, "w") as f:
         nbf.write(nb, f)
     print(f"Built {out}")
+    print(f"Cells: {len(cells)}")
 
 
 if __name__ == "__main__":
