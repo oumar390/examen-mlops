@@ -26,13 +26,17 @@ data/processed/*
 !data/processed/.gitkeep
 
 # Models & MLflow artifacts (local volumes)
-*.joblib
 *.pkl
 *.h5
-models/
 mlruns/
 mlflow_artifacts/
 postgres_data/
+
+# Models — we DO commit the production artifacts so the API can ship them
+# but ignore everything else under models/
+models/*
+!models/best_model.joblib
+!models/metadata.json
 
 # IDE
 .vscode/
