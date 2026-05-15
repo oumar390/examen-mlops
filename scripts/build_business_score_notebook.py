@@ -420,7 +420,7 @@ def build() -> None:
         },
         "language_info": {"name": "python", "version": "3.11.9"},
     }
-    out = Path(__file__).parent / "02_business_score.ipynb"
+    out = Path(__file__).resolve().parents[1] / "notebooks" / "02_business_score.ipynb"
     with open(out, "w") as f:
         nbf.write(nb, f)
     print(f"Built {out}  ({len(cells)} cells)")

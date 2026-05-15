@@ -1238,7 +1238,7 @@ def build() -> None:
             "version": "3.11.9",
         },
     }
-    out = Path(__file__).parent / "01_eda.ipynb"
+    out = Path(__file__).resolve().parents[1] / "notebooks" / "01_eda.ipynb"
     with open(out, "w") as f:
         nbf.write(nb, f)
     print(f"Built {out}")

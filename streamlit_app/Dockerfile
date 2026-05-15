@@ -11,6 +11,7 @@ COPY streamlit_app/requirements.txt /app/requirements.txt
 RUN pip install -r /app/requirements.txt
 
 COPY streamlit_app/app.py /app/app.py
+COPY streamlit_app/profiles.json /app/profiles.json
 
 EXPOSE 8501
 HEALTHCHECK CMD curl -fsS http://localhost:8501/_stcore/health || exit 1

@@ -1,20 +1,29 @@
 """Streamlit UI for the credit scoring API.
 
-Provides a single-page form to score a credit application and visualises
-the result with a gauge, risk badge, and approve/reject decision.
+Designed for ease of testing: the user does NOT have to fill 23 fields
+by hand. Three workflows are available:
 
-API URL is read from the API_URL env var (defaults to http://localhost:8000).
+1. **One-click presets** — Excellent / Good / At-risk / Bad payer
+2. **Random** — picks a random preset
+3. **Manual edit** — once a preset is loaded, every field is still editable
+
+The 23 raw inputs are organised into 3 collapsible sections to keep
+the page short.
 """
 from __future__ import annotations
 
+import json
 import os
+import random
 from datetime import datetime
+from pathlib import Path
 
 import plotly.graph_objects as go
 import requests
 import streamlit as st
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
+PROFILES_PATH = Path(__file__).parent / "profiles.json"
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -25,19 +34,59 @@ st.set_page_config(
     layout="wide",
 )
 
+
+# ---------------------------------------------------------------------------
+# Load profile catalog
+# ---------------------------------------------------------------------------
+@st.cache_data
+def load_profiles() -> dict:
+    return json.loads(PROFILES_PATH.read_text())
+
+
+PROFILES = load_profiles()
+
+
+# ---------------------------------------------------------------------------
+# Session state initialisation
+# ---------------------------------------------------------------------------
+def init_state() -> None:
+    """Initialise st.session_state with the default profile (once)."""
+    if "profile_data" not in st.session_state:
+        st.session_state.profile_data = PROFILES["default"]["data"].copy()
+        st.session_state.profile_name = "default"
+
+
+def load_profile(name: str) -> None:
+    """Replace current form data with the chosen preset."""
+    st.session_state.profile_data = PROFILES[name]["data"].copy()
+    st.session_state.profile_name = name
+
+
+def load_random_profile() -> None:
+    """Pick a random preset (excluding the neutral default)."""
+    pool = [k for k in PROFILES if k != "default"]
+    name = random.choice(pool)
+    load_profile(name)
+
+
+init_state()
+
+
+# ---------------------------------------------------------------------------
+# Header
+# ---------------------------------------------------------------------------
 st.title("💳 Credit Scoring")
 st.caption("Modèle XGBoost entraîné sur UCI Credit Card Default (Taiwan).")
 
+
 # ---------------------------------------------------------------------------
-# Sidebar — model info & connection
+# Sidebar — service info
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.header("⚙️ Service")
     st.code(API_URL, language="text")
-
-    if st.button("🔁 Refresh model info", use_container_width=True):
+    if st.button("🔁 Refresh", use_container_width=True):
         st.rerun()
-
     try:
         info = requests.get(f"{API_URL}/model/info", timeout=5).json()
         st.success("API connectée")
@@ -53,106 +102,120 @@ with st.sidebar:
         st.error(f"API injoignable : {exc}")
         st.stop()
 
-# ---------------------------------------------------------------------------
-# Input form
-# ---------------------------------------------------------------------------
-st.header("👤 Profil du client")
 
-col1, col2, col3 = st.columns(3)
+# ---------------------------------------------------------------------------
+# Quick presets — the star UX feature
+# ---------------------------------------------------------------------------
+st.markdown("### 🎯 Charger un profil-type")
+st.caption(
+    "Évite de remplir les 23 champs : un clic suffit. Tous les champs "
+    "restent éditables ensuite si tu veux ajuster."
+)
 
-with col1:
-    st.subheader("Démographie")
-    age = st.slider("Âge", 18, 80, 35)
-    sex = st.selectbox("Sexe", options=[1, 2], format_func=lambda x: {1: "Homme", 2: "Femme"}[x])
-    education = st.selectbox(
+preset_cols = st.columns(5)
+preset_buttons = [
+    ("excellent", "🟢 Excellent"),
+    ("good", "🔵 Bon"),
+    ("at_risk", "🟡 À risque"),
+    ("bad", "🔴 Mauvais"),
+    ("random", "🎲 Aléatoire"),
+]
+for col, (key, label) in zip(preset_cols, preset_buttons):
+    if col.button(label, use_container_width=True, key=f"btn_{key}"):
+        if key == "random":
+            load_random_profile()
+        else:
+            load_profile(key)
+        st.rerun()
+
+# Show currently loaded profile
+current = PROFILES.get(st.session_state.profile_name, PROFILES["default"])
+st.info(f"**Profil actif :** {current['label']} — {current['description']}")
+
+# Convenience: shortcut to access current values
+d = st.session_state.profile_data
+
+
+# ---------------------------------------------------------------------------
+# Form (3 expanders to keep page compact)
+# ---------------------------------------------------------------------------
+st.markdown("### 📝 Données du client")
+st.caption("Tous les champs sont pré-remplis depuis le profil. Modifie ce que tu veux.")
+
+with st.expander("👤 Démographie", expanded=False):
+    c1, c2, c3 = st.columns(3)
+    d["LIMIT_BAL"] = float(c1.number_input(
+        "Plafond de crédit (NT$)",
+        min_value=10_000, max_value=1_000_000,
+        value=int(d["LIMIT_BAL"]), step=10_000,
+    ))
+    d["AGE"] = c1.slider("Âge", 18, 80, int(d["AGE"]))
+    d["SEX"] = c2.selectbox(
+        "Sexe",
+        options=[1, 2],
+        format_func=lambda x: {1: "Homme", 2: "Femme"}[x],
+        index=[1, 2].index(d["SEX"]),
+    )
+    d["EDUCATION"] = c2.selectbox(
         "Éducation",
         options=[1, 2, 3, 4],
         format_func=lambda x: {
-            1: "École supérieure",
-            2: "Université",
-            3: "Lycée",
-            4: "Autres",
+            1: "École supérieure", 2: "Université",
+            3: "Lycée", 4: "Autres"
         }[x],
+        index=[1, 2, 3, 4].index(d["EDUCATION"]),
     )
-    marriage = st.selectbox(
+    d["MARRIAGE"] = c3.selectbox(
         "Statut marital",
         options=[1, 2, 3],
         format_func=lambda x: {1: "Marié", 2: "Célibataire", 3: "Autres"}[x],
-    )
-    limit_bal = st.number_input(
-        "Plafond de crédit (NT$)",
-        min_value=10_000,
-        max_value=1_000_000,
-        value=200_000,
-        step=10_000,
+        index=[1, 2, 3].index(d["MARRIAGE"]),
     )
 
-with col2:
-    st.subheader("Historique de paiement")
-    st.caption("PAY : -2=no use, -1=paid duly, 0=revolving, 1+=retard en mois")
-    pay_0 = st.slider("Septembre (PAY_0)", -2, 8, 0)
-    pay_2 = st.slider("Août (PAY_2)", -2, 8, 0)
-    pay_3 = st.slider("Juillet (PAY_3)", -2, 8, 0)
-    pay_4 = st.slider("Juin (PAY_4)", -2, 8, 0)
-    pay_5 = st.slider("Mai (PAY_5)", -2, 8, 0)
-    pay_6 = st.slider("Avril (PAY_6)", -2, 8, 0)
+with st.expander("💳 Historique de paiement (6 mois)", expanded=True):
+    st.caption("PAY: −2=non utilisé · −1=payé à temps · 0=revolving · 1+=retard en mois")
+    pay_cols = st.columns(6)
+    pay_labels = [
+        ("PAY_0", "Sept"), ("PAY_2", "Août"), ("PAY_3", "Juillet"),
+        ("PAY_4", "Juin"), ("PAY_5", "Mai"), ("PAY_6", "Avril"),
+    ]
+    for col, (key, label) in zip(pay_cols, pay_labels):
+        d[key] = col.slider(label, -2, 8, int(d[key]), key=f"slider_{key}")
 
-with col3:
-    st.subheader("Factures (BILL_AMT)")
-    bill_1 = st.number_input("Sept (BILL_AMT1)", value=50_000, step=1_000)
-    bill_2 = st.number_input("Août (BILL_AMT2)", value=48_000, step=1_000)
-    bill_3 = st.number_input("Juillet (BILL_AMT3)", value=45_000, step=1_000)
-    bill_4 = st.number_input("Juin (BILL_AMT4)", value=42_000, step=1_000)
-    bill_5 = st.number_input("Mai (BILL_AMT5)", value=40_000, step=1_000)
-    bill_6 = st.number_input("Avril (BILL_AMT6)", value=38_000, step=1_000)
+with st.expander("💰 Montants mensuels (factures et paiements)", expanded=False):
+    st.caption("BILL_AMT = facture émise · PAY_AMT = montant effectivement payé")
+    months = ["Sept", "Août", "Juillet", "Juin", "Mai", "Avril"]
 
-with st.expander("💵 Montants payés mensuellement (PAY_AMT)"):
-    p1, p2, p3, p4, p5, p6 = st.columns(6)
-    pay_amt_1 = p1.number_input("Sept", value=5_000, step=500, min_value=0)
-    pay_amt_2 = p2.number_input("Août", value=5_000, step=500, min_value=0)
-    pay_amt_3 = p3.number_input("Juillet", value=5_000, step=500, min_value=0)
-    pay_amt_4 = p4.number_input("Juin", value=5_000, step=500, min_value=0)
-    pay_amt_5 = p5.number_input("Mai", value=5_000, step=500, min_value=0)
-    pay_amt_6 = p6.number_input("Avril", value=5_000, step=500, min_value=0)
+    st.markdown("**Factures (NT$)**")
+    bill_cols = st.columns(6)
+    for i, (col, month) in enumerate(zip(bill_cols, months), start=1):
+        key = f"BILL_AMT{i}"
+        d[key] = float(col.number_input(
+            month, value=int(d[key]), step=1_000, key=f"bill_{i}"
+        ))
 
-# Pre-built sample profiles
-st.subheader("⚡ Profils pré-remplis")
-preset_col1, preset_col2, _ = st.columns([1, 1, 4])
-
-preset_low = preset_col1.button("Bon payeur", use_container_width=True)
-preset_high = preset_col2.button("Mauvais payeur", use_container_width=True)
-
-if preset_low:
-    st.session_state["preset"] = "low"
-    st.rerun()
-if preset_high:
-    st.session_state["preset"] = "high"
-    st.rerun()
+    st.markdown("**Paiements (NT$)**")
+    pay_amt_cols = st.columns(6)
+    for i, (col, month) in enumerate(zip(pay_amt_cols, months), start=1):
+        key = f"PAY_AMT{i}"
+        d[key] = float(col.number_input(
+            month, value=int(d[key]), step=500, min_value=0, key=f"payamt_{i}"
+        ))
 
 
 # ---------------------------------------------------------------------------
-# Predict
+# Prediction
 # ---------------------------------------------------------------------------
 st.markdown("---")
-predict_clicked = st.button("🔮 Prédire le risque de défaut", type="primary", use_container_width=True)
+
+predict_clicked = st.button(
+    "🔮 Prédire le risque de défaut",
+    type="primary",
+    use_container_width=True,
+)
 
 if predict_clicked:
-    payload = {
-        "LIMIT_BAL": float(limit_bal),
-        "SEX": sex,
-        "EDUCATION": education,
-        "MARRIAGE": marriage,
-        "AGE": age,
-        "PAY_0": pay_0, "PAY_2": pay_2, "PAY_3": pay_3,
-        "PAY_4": pay_4, "PAY_5": pay_5, "PAY_6": pay_6,
-        "BILL_AMT1": float(bill_1), "BILL_AMT2": float(bill_2),
-        "BILL_AMT3": float(bill_3), "BILL_AMT4": float(bill_4),
-        "BILL_AMT5": float(bill_5), "BILL_AMT6": float(bill_6),
-        "PAY_AMT1": float(pay_amt_1), "PAY_AMT2": float(pay_amt_2),
-        "PAY_AMT3": float(pay_amt_3), "PAY_AMT4": float(pay_amt_4),
-        "PAY_AMT5": float(pay_amt_5), "PAY_AMT6": float(pay_amt_6),
-    }
-
+    payload = st.session_state.profile_data
     with st.spinner("Calcul en cours…"):
         try:
             resp = requests.post(f"{API_URL}/predict", json=payload, timeout=15)
@@ -162,7 +225,6 @@ if predict_clicked:
             st.error(f"Échec de la prédiction : {exc}")
             st.stop()
 
-    # --- Display ---
     proba = result["probability_default"]
     threshold = result["threshold"]
     risk = result["risk_level"]
@@ -174,7 +236,6 @@ if predict_clicked:
         "high": "#E67E22",
         "very_high": "#C0392B",
     }[risk]
-
     risk_label = {
         "low": "Risque faible",
         "medium": "Risque modéré",
@@ -238,5 +299,5 @@ if predict_clicked:
 st.markdown("---")
 st.caption(
     f"⏱️  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  •  "
-    f"Modèle XGBoost, seuil métier optimisé (FN×5 = FP)."
+    "Modèle XGBoost · seuil métier optimisé (FN×5 = FP)."
 )

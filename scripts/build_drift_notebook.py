@@ -217,7 +217,7 @@ def build() -> None:
         "kernelspec": {"display_name": "Python 3.11 (.venv)", "language": "python", "name": "python3"},
         "language_info": {"name": "python", "version": "3.11.9"},
     }
-    out = Path(__file__).parent / "04_drift.ipynb"
+    out = Path(__file__).resolve().parents[1] / "notebooks" / "04_drift.ipynb"
     with open(out, "w") as f:
         nbf.write(nb, f)
     print(f"Built {out}  ({len(cells)} cells)")

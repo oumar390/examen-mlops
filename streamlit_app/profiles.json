@@ -1,0 +1,67 @@
+{
+  "default": {
+    "label": "Profil neutre",
+    "description": "Profil moyen — bon point de départ pour saisir manuellement.",
+    "data": {
+      "LIMIT_BAL": 200000.0,
+      "SEX": 2, "EDUCATION": 2, "MARRIAGE": 1, "AGE": 35,
+      "PAY_0": 0, "PAY_2": 0, "PAY_3": 0, "PAY_4": 0, "PAY_5": 0, "PAY_6": 0,
+      "BILL_AMT1": 50000.0, "BILL_AMT2": 48000.0, "BILL_AMT3": 45000.0,
+      "BILL_AMT4": 42000.0, "BILL_AMT5": 40000.0, "BILL_AMT6": 38000.0,
+      "PAY_AMT1": 5000.0, "PAY_AMT2": 5000.0, "PAY_AMT3": 5000.0,
+      "PAY_AMT4": 5000.0, "PAY_AMT5": 5000.0, "PAY_AMT6": 5000.0
+    }
+  },
+  "excellent": {
+    "label": "🟢 Excellent payeur",
+    "description": "Plafond élevé, paie tout à temps, jamais en retard.",
+    "data": {
+      "LIMIT_BAL": 500000.0,
+      "SEX": 2, "EDUCATION": 1, "MARRIAGE": 1, "AGE": 42,
+      "PAY_0": -1, "PAY_2": -1, "PAY_3": -1, "PAY_4": -1, "PAY_5": -1, "PAY_6": -1,
+      "BILL_AMT1": 18000.0, "BILL_AMT2": 16000.0, "BILL_AMT3": 14000.0,
+      "BILL_AMT4": 12000.0, "BILL_AMT5": 10000.0, "BILL_AMT6": 8000.0,
+      "PAY_AMT1": 18000.0, "PAY_AMT2": 16000.0, "PAY_AMT3": 14000.0,
+      "PAY_AMT4": 12000.0, "PAY_AMT5": 10000.0, "PAY_AMT6": 8000.0
+    }
+  },
+  "good": {
+    "label": "🔵 Bon payeur",
+    "description": "Crédit revolving normal, paie régulièrement, parfois 1 mois de retard.",
+    "data": {
+      "LIMIT_BAL": 200000.0,
+      "SEX": 2, "EDUCATION": 2, "MARRIAGE": 1, "AGE": 35,
+      "PAY_0": 0, "PAY_2": 0, "PAY_3": -1, "PAY_4": 0, "PAY_5": -1, "PAY_6": 0,
+      "BILL_AMT1": 65000.0, "BILL_AMT2": 60000.0, "BILL_AMT3": 55000.0,
+      "BILL_AMT4": 50000.0, "BILL_AMT5": 45000.0, "BILL_AMT6": 40000.0,
+      "PAY_AMT1": 8000.0, "PAY_AMT2": 7000.0, "PAY_AMT3": 6000.0,
+      "PAY_AMT4": 5000.0, "PAY_AMT5": 5000.0, "PAY_AMT6": 5000.0
+    }
+  },
+  "at_risk": {
+    "label": "🟡 Client à risque",
+    "description": "Quelques retards récents, utilisation élevée du plafond.",
+    "data": {
+      "LIMIT_BAL": 80000.0,
+      "SEX": 1, "EDUCATION": 2, "MARRIAGE": 2, "AGE": 28,
+      "PAY_0": 1, "PAY_2": 1, "PAY_3": 0, "PAY_4": 0, "PAY_5": 0, "PAY_6": 0,
+      "BILL_AMT1": 70000.0, "BILL_AMT2": 65000.0, "BILL_AMT3": 60000.0,
+      "BILL_AMT4": 55000.0, "BILL_AMT5": 50000.0, "BILL_AMT6": 45000.0,
+      "PAY_AMT1": 2000.0, "PAY_AMT2": 2000.0, "PAY_AMT3": 3000.0,
+      "PAY_AMT4": 3000.0, "PAY_AMT5": 4000.0, "PAY_AMT6": 4000.0
+    }
+  },
+  "bad": {
+    "label": "🔴 Mauvais payeur",
+    "description": "Plusieurs mois de retard consécutifs, paiements minimes.",
+    "data": {
+      "LIMIT_BAL": 20000.0,
+      "SEX": 1, "EDUCATION": 3, "MARRIAGE": 2, "AGE": 22,
+      "PAY_0": 4, "PAY_2": 3, "PAY_3": 3, "PAY_4": 3, "PAY_5": 2, "PAY_6": 2,
+      "BILL_AMT1": 19000.0, "BILL_AMT2": 18500.0, "BILL_AMT3": 18000.0,
+      "BILL_AMT4": 17000.0, "BILL_AMT5": 16000.0, "BILL_AMT6": 15000.0,
+      "PAY_AMT1": 0.0, "PAY_AMT2": 0.0, "PAY_AMT3": 0.0,
+      "PAY_AMT4": 100.0, "PAY_AMT5": 100.0, "PAY_AMT6": 100.0
+    }
+  }
+}
